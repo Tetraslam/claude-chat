@@ -166,7 +166,7 @@ IMPORTANT: When you receive a <channel source="claude-peers" ...> message, RESPO
 Read the from_id, from_summary, and from_cwd attributes to understand who sent the message. Reply by calling send_message with their from_id.
 
 Available tools:
-- list_peers: Discover other Claude Code instances (scope: network/machine/directory/repo)
+- list_peers: Discover all other Claude Code instances. Shows hostname, cwd, git repo, and summary so you can decide who is relevant. Defaults to showing everyone on the network.
 - send_message: Send a message to another instance by ID
 - set_summary: Set a 1-2 sentence summary of what you're working on (visible to other peers)
 - check_messages: Manually check for new messages
@@ -181,18 +181,18 @@ const TOOLS = [
   {
     name: "list_peers",
     description:
-      "List other Claude Code instances on the network. Returns their ID, hostname, working directory, git repo, and summary.",
+      "List all other Claude Code instances on the network. Returns their ID, hostname, working directory, git repo, and summary. Use the metadata to decide who is relevant to your task.",
     inputSchema: {
       type: "object" as const,
       properties: {
         scope: {
           type: "string" as const,
-          enum: ["machine", "directory", "repo", "network"],
+          enum: ["network", "machine", "directory", "repo"],
+          default: "network",
           description:
-            'Scope of peer discovery. "network" = all instances across all machines. "machine" = same hostname. "directory" = same working directory. "repo" = same git repository.',
+            'Defaults to "network" (all instances across all machines). Optional filters: "machine" = same hostname, "directory" = same working directory, "repo" = same git repository.',
         },
       },
-      required: ["scope"],
     },
   },
   {
@@ -251,7 +251,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
   switch (name) {
     case "list_peers": {
-      const scope = (args as { scope: string }).scope as "machine" | "directory" | "repo" | "network";
+      const scope = ((args as { scope?: string }).scope ?? "network") as "machine" | "directory" | "repo" | "network";
       try {
         const peers = await brokerFetch<Peer[]>("/list-peers", {
           scope,

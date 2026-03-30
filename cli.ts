@@ -12,16 +12,20 @@
  */
 
 const BROKER_PORT = parseInt(process.env.CLAUDE_PEERS_PORT ?? "7899", 10);
-const BROKER_URL = `http://127.0.0.1:${BROKER_PORT}`;
+const BROKER_HOST = process.env.CLAUDE_PEERS_HOST ?? "127.0.0.1";
+const BROKER_URL = `http://${BROKER_HOST}:${BROKER_PORT}`;
+const BROKER_TOKEN = process.env.CLAUDE_PEERS_TOKEN ?? "";
 
 async function brokerFetch<T>(path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (BROKER_TOKEN) headers["Authorization"] = `Bearer ${BROKER_TOKEN}`;
   const opts: RequestInit = body
     ? {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { ...headers, "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }
-    : {};
+    : { headers };
   const res = await fetch(`${BROKER_URL}${path}`, {
     ...opts,
     signal: AbortSignal.timeout(3000),
@@ -46,6 +50,7 @@ switch (cmd) {
           Array<{
             id: string;
             pid: number;
+            hostname: string;
             cwd: string;
             git_root: string | null;
             tty: string | null;
@@ -53,14 +58,14 @@ switch (cmd) {
             last_seen: string;
           }>
         >("/list-peers", {
-          scope: "machine",
+          scope: "network",
           cwd: "/",
           git_root: null,
         });
 
         console.log("\nPeers:");
         for (const p of peers) {
-          console.log(`  ${p.id}  PID:${p.pid}  ${p.cwd}`);
+          console.log(`  ${p.id}  ${p.hostname}  PID:${p.pid}  ${p.cwd}`);
           if (p.summary) console.log(`         ${p.summary}`);
           if (p.tty) console.log(`         TTY: ${p.tty}`);
           console.log(`         Last seen: ${p.last_seen}`);
@@ -78,6 +83,7 @@ switch (cmd) {
         Array<{
           id: string;
           pid: number;
+          hostname: string;
           cwd: string;
           git_root: string | null;
           tty: string | null;
@@ -85,7 +91,7 @@ switch (cmd) {
           last_seen: string;
         }>
       >("/list-peers", {
-        scope: "machine",
+        scope: "network",
         cwd: "/",
         git_root: null,
       });
@@ -94,7 +100,7 @@ switch (cmd) {
         console.log("No peers registered.");
       } else {
         for (const p of peers) {
-          const parts = [`${p.id}  PID:${p.pid}  ${p.cwd}`];
+          const parts = [`${p.id}  ${p.hostname}  PID:${p.pid}  ${p.cwd}`];
           if (p.summary) parts.push(`  Summary: ${p.summary}`);
           console.log(parts.join("\n"));
         }

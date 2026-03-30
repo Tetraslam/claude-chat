@@ -35,17 +35,23 @@ import {
 // --- Configuration ---
 
 const BROKER_PORT = parseInt(process.env.CLAUDE_PEERS_PORT ?? "7899", 10);
-const BROKER_URL = `http://127.0.0.1:${BROKER_PORT}`;
+const BROKER_HOST = process.env.CLAUDE_PEERS_HOST ?? "127.0.0.1";
+const BROKER_URL = `http://${BROKER_HOST}:${BROKER_PORT}`;
+const BROKER_TOKEN = process.env.CLAUDE_PEERS_TOKEN ?? "";
+const BROKER_REMOTE = process.env.CLAUDE_PEERS_REMOTE === "true";
 const POLL_INTERVAL_MS = 1000;
 const HEARTBEAT_INTERVAL_MS = 15_000;
 const BROKER_SCRIPT = new URL("./broker.ts", import.meta.url).pathname;
+const MY_HOSTNAME = require("os").hostname();
 
 // --- Broker communication ---
 
 async function brokerFetch<T>(path: string, body: unknown): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (BROKER_TOKEN) headers["Authorization"] = `Bearer ${BROKER_TOKEN}`;
   const res = await fetch(`${BROKER_URL}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -70,17 +76,19 @@ async function ensureBroker(): Promise<void> {
     return;
   }
 
+  if (BROKER_REMOTE) {
+    throw new Error(
+      `Cannot reach remote broker at ${BROKER_URL}. Ensure the broker is running on the remote host.`
+    );
+  }
+
   log("Starting broker daemon...");
   const proc = Bun.spawn(["bun", BROKER_SCRIPT], {
     stdio: ["ignore", "ignore", "inherit"],
-    // Detach so the broker survives if this MCP server exits
-    // On macOS/Linux, the broker will keep running
   });
 
-  // Unref so this process can exit without waiting for the broker
   proc.unref();
 
-  // Wait for it to come up
   for (let i = 0; i < 30; i++) {
     await new Promise((r) => setTimeout(r, 200));
     if (await isBrokerAlive()) {
@@ -148,14 +156,14 @@ const mcp = new Server(
       experimental: { "claude/channel": {} },
       tools: {},
     },
-    instructions: `You are connected to the claude-peers network. Other Claude Code instances on this machine can see you and send you messages.
+    instructions: `You are connected to the claude-peers network. Other Claude Code instances — on this machine or across the network — can see you and send you messages.
 
 IMPORTANT: When you receive a <channel source="claude-peers" ...> message, RESPOND IMMEDIATELY. Do not wait until your current task is finished. Pause what you are doing, reply to the message using send_message, then resume your work. Treat incoming peer messages like a coworker tapping you on the shoulder — answer right away, even if you're in the middle of something.
 
 Read the from_id, from_summary, and from_cwd attributes to understand who sent the message. Reply by calling send_message with their from_id.
 
 Available tools:
-- list_peers: Discover other Claude Code instances (scope: machine/directory/repo)
+- list_peers: Discover other Claude Code instances (scope: network/machine/directory/repo)
 - send_message: Send a message to another instance by ID
 - set_summary: Set a 1-2 sentence summary of what you're working on (visible to other peers)
 - check_messages: Manually check for new messages
@@ -170,15 +178,15 @@ const TOOLS = [
   {
     name: "list_peers",
     description:
-      "List other Claude Code instances running on this machine. Returns their ID, working directory, git repo, and summary.",
+      "List other Claude Code instances on the network. Returns their ID, hostname, working directory, git repo, and summary.",
     inputSchema: {
       type: "object" as const,
       properties: {
         scope: {
           type: "string" as const,
-          enum: ["machine", "directory", "repo"],
+          enum: ["machine", "directory", "repo", "network"],
           description:
-            'Scope of peer discovery. "machine" = all instances on this computer. "directory" = same working directory. "repo" = same git repository (including worktrees or subdirectories).',
+            'Scope of peer discovery. "network" = all instances across all machines. "machine" = same hostname. "directory" = same working directory. "repo" = same git repository.',
         },
       },
       required: ["scope"],
@@ -240,10 +248,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
   switch (name) {
     case "list_peers": {
-      const scope = (args as { scope: string }).scope as "machine" | "directory" | "repo";
+      const scope = (args as { scope: string }).scope as "machine" | "directory" | "repo" | "network";
       try {
         const peers = await brokerFetch<Peer[]>("/list-peers", {
           scope,
+          hostname: MY_HOSTNAME,
           cwd: myCwd,
           git_root: myGitRoot,
           exclude_id: myId,
@@ -263,6 +272,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         const lines = peers.map((p) => {
           const parts = [
             `ID: ${p.id}`,
+            `Host: ${p.hostname}`,
             `PID: ${p.pid}`,
             `CWD: ${p.cwd}`,
           ];
@@ -413,7 +423,7 @@ async function pollAndPushMessages() {
       let fromCwd = "";
       try {
         const peers = await brokerFetch<Peer[]>("/list-peers", {
-          scope: "machine",
+          scope: "network",
           cwd: myCwd,
           git_root: myGitRoot,
         });
@@ -490,6 +500,7 @@ async function main() {
   // 4. Register with broker
   const reg = await brokerFetch<RegisterResponse>("/register", {
     pid: process.pid,
+    hostname: MY_HOSTNAME,
     cwd: myCwd,
     git_root: myGitRoot,
     tty,

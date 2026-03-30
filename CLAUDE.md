@@ -10,19 +10,31 @@ Peer discovery and messaging MCP channel for Claude Code instances.
 
 ## Architecture
 
-- `broker.ts` — Singleton HTTP daemon on localhost:7899 + SQLite. Auto-launched by the MCP server.
-- `server.ts` — MCP stdio server, one per Claude Code instance. Connects to broker, exposes tools, pushes channel notifications.
+- `broker.ts` — HTTP daemon (default localhost:7899) + SQLite. Can bind to 0.0.0.0 for network access. Auto-launched by the MCP server in local mode.
+- `server.ts` — MCP stdio server, one per Claude Code instance. Connects to broker (local or remote), exposes tools, pushes channel notifications.
 - `shared/types.ts` — Shared TypeScript types for broker API.
 - `shared/summarize.ts` — Auto-summary generation via gpt-5.4-nano.
 - `cli.ts` — CLI utility for inspecting broker state.
 
-## Running
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `CLAUDE_PEERS_PORT` | `7899` | Broker HTTP port |
+| `CLAUDE_PEERS_BIND` | `127.0.0.1` | Broker bind address. Set to `0.0.0.0` for network access |
+| `CLAUDE_PEERS_HOST` | `127.0.0.1` | Broker hostname (used by server.ts and cli.ts to connect) |
+| `CLAUDE_PEERS_REMOTE` | `false` | Set to `true` to skip auto-launching the broker (for remote connections) |
+| `CLAUDE_PEERS_TOKEN` | _(empty)_ | Shared secret for bearer token auth. If set, all requests must include it |
+| `CLAUDE_PEERS_DB` | `~/.claude-peers.db` | SQLite database path |
+| `OPENAI_API_KEY` | _(empty)_ | Enables auto-summary via gpt-5.4-nano (optional) |
+
+## Running Locally
 
 ```bash
 # Start Claude Code with the channel:
 claude --dangerously-load-development-channels server:claude-peers
 
-# Or just add to .mcp.json and use as regular MCP (no channel push, but tools work):
+# Or add to .mcp.json:
 # { "claude-peers": { "command": "bun", "args": ["./server.ts"] } }
 
 # CLI:
@@ -31,6 +43,48 @@ bun cli.ts peers
 bun cli.ts send <peer-id> <message>
 bun cli.ts kill-broker
 ```
+
+## Running Across the Network (e.g. Tailscale)
+
+### 1. Start the broker on a central machine
+
+```bash
+CLAUDE_PEERS_BIND=0.0.0.0 CLAUDE_PEERS_TOKEN=your-secret bun broker.ts
+```
+
+### 2. Configure each Claude Code instance to connect remotely
+
+Add to your `.mcp.json` (or `~/.claude/settings.json` under `mcpServers`):
+
+```json
+{
+  "mcpServers": {
+    "claude-peers": {
+      "command": "bun",
+      "args": ["/path/to/server.ts"],
+      "env": {
+        "CLAUDE_PEERS_HOST": "your-broker-host.tailnet.ts.net",
+        "CLAUDE_PEERS_PORT": "7899",
+        "CLAUDE_PEERS_REMOTE": "true",
+        "CLAUDE_PEERS_TOKEN": "your-secret"
+      }
+    }
+  }
+}
+```
+
+### 3. Use the CLI from any machine
+
+```bash
+CLAUDE_PEERS_HOST=your-broker-host CLAUDE_PEERS_TOKEN=your-secret bun cli.ts status
+```
+
+### Notes
+
+- Over Tailscale, WireGuard handles encryption, so plain HTTP is fine.
+- The token is defense-in-depth since only your tailnet nodes can reach the broker.
+- Local peers are cleaned up via PID checks; remote peers are cleaned up if they miss heartbeats for 60 seconds.
+- Discovery scopes: `network` (all peers everywhere), `machine` (same hostname), `directory` (same cwd), `repo` (same git root).
 
 ## Bun
 

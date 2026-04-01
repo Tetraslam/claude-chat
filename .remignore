@@ -1,0 +1,13 @@
+# Rem ignore — files excluded from scans
+node_modules/
+.git/
+dist/
+build/
+.next/
+*.min.js
+*.min.css
+*.lock
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+*.map
